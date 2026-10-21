@@ -111,7 +111,7 @@ def cmd_live(args) -> None:
         source = MicSource(args.input_device, args.input_samplerate)
     engine, model, avatar = _build_engine(args, source.src_sr)
 
-    per_batch = model.warm_up(args.batch_size)
+    per_batch = engine.warm_up()
     budget = args.batch_size / VIDEO_FPS
     est = (2 * args.batch_size + RIGHT_CONTEXT_FRAMES) * 0.02 + per_batch + args.prebuffer / VIDEO_FPS
     log.info("每批 %d 帧推理 %.0f ms（实时上限 %.0f ms），预计延迟约 %.0f ms",

@@ -66,6 +66,11 @@ class LipSyncEngine:
     def frames_per_step(self) -> int:
         return self.featurizer.frames_per_step
 
+    def warm_up(self) -> float:
+        """Prepares the audio features and the model so the first sentence is not delayed. Returns seconds per batch."""
+        self.featurizer.warm_up()
+        return self.model.warm_up(self.batch_size)
+
     def process(self, frames: list[AudioFrame]) -> list[VideoFrame]:
         for f in frames:
             if f.speech is None:

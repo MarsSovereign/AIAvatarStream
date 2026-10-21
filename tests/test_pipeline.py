@@ -52,6 +52,7 @@ def test_realtime_pipeline_keeps_pace_and_audio_in_step(tmp_path, fake_model, sy
     mjpeg = MJPEGSink("127.0.0.1", port, stats=stats.snapshot)
     player = Player([sink, mjpeg], None, stats)
     worker = EngineThread(engine, source, frames)
+    engine.warm_up()
 
     mjpeg.start()
     player.start(frames)

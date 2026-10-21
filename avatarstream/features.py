@@ -36,6 +36,11 @@ class MelFeaturizer:
     def frames_per_step(self) -> int:
         return 2 * self.batch_size
 
+    def warm_up(self) -> None:
+        """librosa compiles its numba kernels on first use, which can take seconds; do it before going live."""
+        n = (self.left + self.right + self.frames_per_step) * len(self._context[0])
+        w2l_audio.melspectrogram(np.zeros(n, np.float32))
+
     def step(self, frames: list[AudioFrame]) -> list[tuple[np.ndarray, list[AudioFrame]]]:
         if len(frames) != self.frames_per_step:
             raise ValueError(f"expected {self.frames_per_step} audio frames, got {len(frames)}")
