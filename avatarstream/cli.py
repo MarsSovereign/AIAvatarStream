@@ -87,6 +87,18 @@ def _lipsync_device(args) -> str:
     return device
 
 
+def cmd_doctor(args) -> None:
+    from .doctor import run
+
+    report, problems = run(".")
+    print(report)
+    os.makedirs("output", exist_ok=True)
+    path = os.path.join("output", "diagnostics.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(report + "\n")
+    print(f"\n报告已保存到 {path}，遇到问题时把它和报错一起发出来。")
+
+
 def cmd_devices(args) -> None:
     from .audio_io import describe_devices
 
@@ -370,6 +382,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("devices", help="列出音频设备")
     s.set_defaults(func=cmd_devices)
+
+    s = sub.add_parser("doctor", help="检查安装情况，生成诊断报告")
+    s.set_defaults(func=cmd_doctor)
 
     s = sub.add_parser("download", help="下载模型和示例形象")
     s.add_argument("--avatar", default="glass_man", help="glass_man / female_model / long_hair_girl / all")

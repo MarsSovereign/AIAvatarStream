@@ -16,6 +16,30 @@
 
 画面里始终是数字人形象，声音始终是数字人的音色，但说话的人是你本人。这符合抖音等平台对数字人直播“真人驱动、实时互动”的要求（详见[合规](#合规与授权)）。
 
+## 项目状态
+
+**代码已完成，还没有在 Windows + 显卡上实测。** 第一次使用前，请先按 **[Windows 首次验收](docs/Windows首次验收.md)** 走一遍。
+
+| | 状态 | 怎么验证的 |
+|---|---|---|
+| 口型生成正确（MuseTalk、Wav2Lip） | ✅ 已验证 | 在 Linux 服务器上用 CPU 跑真实模型：说话时嘴在动，停下来闭嘴，眼睛和背景不变 |
+| 音画没有错位 | ✅ 已验证 | 每帧的音频窗口和官方实现逐帧比对一致 |
+| 画质：MuseTalk 明显好于 Wav2Lip | ✅ 已验证 | 同一段语音两种模型对比，MuseTalk 嘴部清晰、能看到牙齿 |
+| 整条流程能跑通 | ✅ 已验证 | 用音频文件代替麦克风，跑完输入、口型、25 帧输出、预览、状态页、录像 |
+| 显卡分配逻辑 | ✅ 已验证 | 用模拟的强卡和弱卡测试 |
+| **显卡上实时跑到 25 帧/秒** | ⏳ 待验证 | 只能在有 N 卡的电脑上测，是能否直播的前提 |
+| **Windows 安装和脚本** | ⏳ 待验证 | 所有 .bat 脚本还没在 Windows 上运行过 |
+| **麦克风、虚拟声卡、RVC、OBS** | ⏳ 待验证 | 服务器上没有这些设备 |
+| **实际延迟、音画同步、长时间稳定** | ⏳ 待验证 | 需要实际试播 |
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [Windows 首次验收](docs/Windows首次验收.md) | 第一次使用：6 步验收清单，每一步都有通过标准，以及出问题时该发什么 |
+| [直播搭建指南](docs/直播搭建指南.md) | 虚拟声卡、变声器、多显卡、OBS、推流，按步骤搭好整套直播 |
+| [形象制作指南](docs/形象制作指南.md) | 怎么准备待机视频、生成自己的数字人形象、调整嘴部区域 |
+
 ## 它做什么，不做什么
 
 | 做 | 不做 |
@@ -55,7 +79,10 @@
    - 它会创建 `.venv`、装 GPU 版 PyTorch 和依赖，再下载 Wav2Lip 和 MuseTalk 模型（共约 4.3 GB）和示例形象，最后给示例形象生成 MuseTalk 数据。
    - RTX 50 系显卡先用记事本打开 `install.bat`，把 `cu124` 改成 `cu128`。
    - 国内下载 HuggingFace 慢的话，先在命令行执行 `set HF_ENDPOINT=https://hf-mirror.com` 再运行。
-3. 双击 `scripts\test_render.bat`：用自带的测试语音分别生成 MuseTalk 和 Wav2Lip 两个版本，放在 `output\` 里，可以对比画质，也能看出显卡速度。
+3. 双击 `scripts\doctor.bat` 检查安装情况，结果同时保存在 `output\diagnostics.txt`。
+4. 双击 `scripts\test_render.bat`：用自带的测试语音分别生成 MuseTalk 和 Wav2Lip 两个版本，放在 `output\` 里，可以对比画质，也能看出显卡速度。
+
+接下来按 [Windows 首次验收](docs/Windows首次验收.md) 继续。
 
 ### 手动安装（任何系统）
 
@@ -83,6 +110,7 @@ python -m avatarstream prepare-musetalk --avatar data/wav2lip_avatar_glass_man
 ## 命令速查
 
 ```bash
+python -m avatarstream doctor                        # 检查安装情况，生成诊断报告
 python -m avatarstream devices                       # 列出音频设备
 python -m avatarstream gpus --setup --test-lipsync   # 多显卡：给口型和变声分配显卡
 python -m avatarstream download --avatar all          # 下载模型和三个示例形象
@@ -167,22 +195,12 @@ python -m avatarstream live --device cuda:0                   # 临时指定，�
 
 ## 做自己的形象
 
-1. 拍或生成一段 **10 到 30 秒、正脸、闭着嘴、有轻微自然动作**的视频。眨眼、轻微点头都可以，不要张嘴说话。
-   - 最省事也最安全：用图生视频工具（可灵、MiniMax、Wan 等）生成一个**不存在的虚拟人**，没有肖像权问题。
-2. 生成形象：
-   ```bash
-   python -m avatarstream make-avatar --video idle.mp4 --out data/my_avatar --resize-height 1280
-   ```
-   - 默认用 S3FD 检测人脸（第一次会自动下载 85 MB 权重），`--detector haar` 不用下载但不如它准。
-   - 下巴被切掉的话，加大下边距：`--pads 0 20 0 0`。
-3. 用 MuseTalk 的话，再给它生成 MuseTalk 数据（人脸关键点、隐空间编码、嘴部融合遮罩），每个形象做一次：
-   ```bash
-   python -m avatarstream prepare-musetalk --avatar data/my_avatar
-   ```
-   嘴张得不够大或嘴部区域偏上，可以加 `--bbox-shift 5` 这类正数把区域往下挪，负数往上挪。
-4. 开播时加 `--avatar data/my_avatar`。
+详细要求和技巧见 **[形象制作指南](docs/形象制作指南.md)**。简要流程：
 
-待机画面会正放、倒放循环，所以视频首尾不需要刻意衔接。
+1. 准备一段 **10 到 30 秒、正脸、全程闭嘴、动作轻微**的待机视频。推荐用图生视频工具生成一个不存在的虚拟人，没有肖像权问题。
+2. 生成形象：`python -m avatarstream make-avatar --video idle.mp4 --out data/my_avatar --resize-height 1280`
+3. 生成 MuseTalk 数据（每个形象一次）：`python -m avatarstream prepare-musetalk --avatar data/my_avatar`
+4. 用 `render` 生成一段检查效果，满意后把 `start_live.bat` 里的 `AVATAR` 改成它。
 
 ## 合规与授权
 
@@ -210,10 +228,11 @@ ruff check .
 - **显卡分配**（用模拟的强卡和弱卡）：负载重的任务分到快的卡；配置按 UUID 找卡，显卡编号变了也能找对；交互式设置里可以逐项改掉推荐；变声器启动脚本里写入了正确的 UUID；实测口型跑不动的卡会被自动避开。
 - **MuseTalk 音频窗口**：流式切出的每一帧 50×384 特征，和 MuseTalk 官方离线实现的取法逐值一致（用可追踪的替身特征验证）；用真实 Whisper 模型时，和离线特征在零偏移处最相似（相似度 0.9 以上），错开一帧就明显变差，说明没有一帧的错位。
 - **MuseTalk 真实模型**（CPU 上几分钟）：生成的人脸框和 Wav2Lip 检测到的是同一张脸；说话时嘴部被重绘且逐帧在动；遮罩以上的部分（眼睛等）与原画逐像素一致。
+- **诊断与录像**：`doctor` 生成完整报告；电脑上没装 ffmpeg 时，录像改用 Python 包自带的 ffmpeg，音画照样合在一起。
 - **形象生成**：S3FD 和 Haar 检测出的人脸框，与示例形象自带的人脸框重合度分别超过 0.8 和 0.6。
 - **真实模型**：用真人语音驱动时，嘴部的运动明显大于待机视频本身的运动；离线渲染的音画时长一致。
 
-**没有自动测试的部分**：MuseTalk 和 Wav2Lip 在 GPU 上的实时性能和多卡的真实运行（分配逻辑已用模拟显卡测过）、真实麦克风和虚拟声卡、虚拟摄像头输出。这些需要在你的 Windows 电脑上验证，步骤见[直播搭建指南](docs/直播搭建指南.md)里的“开播前检查”。
+**没有自动测试的部分**：MuseTalk 和 Wav2Lip 在 GPU 上的实时性能和多卡的真实运行（分配逻辑已用模拟显卡测过）、Windows 脚本、真实麦克风和虚拟声卡、虚拟摄像头输出。这些需要在 Windows 电脑上验证，见 [Windows 首次验收](docs/Windows首次验收.md)。
 
 ## 致谢与许可
 

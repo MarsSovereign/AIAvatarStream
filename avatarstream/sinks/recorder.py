@@ -17,6 +17,19 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 
+def find_ffmpeg() -> str | None:
+    """ffmpeg on PATH, or the copy bundled with the imageio-ffmpeg package (Windows has none by default)."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
 class RecorderSink:
     def __init__(self, path: str, width: int, height: int, audio_sr: int, fps: int = 25):
         self.path = path
@@ -26,7 +39,7 @@ class RecorderSink:
         self._video_path = os.path.join(self._tmpdir, "video.mp4")
         self._audio: list[np.ndarray] = []
         self.frames = 0
-        self._ffmpeg = shutil.which("ffmpeg")
+        self._ffmpeg = find_ffmpeg()
         self._proc = None
         self._writer = None
         if self._ffmpeg:
