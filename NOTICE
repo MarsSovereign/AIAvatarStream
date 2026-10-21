@@ -1,0 +1,22 @@
+AIAvatarStream
+Copyright 2026 MarsSovereign
+
+This product includes software from the following projects, licensed under the
+Apache License, Version 2.0:
+
+- LiveTalking, Copyright (C) 2024 lipku (https://github.com/lipku/LiveTalking)
+  The audio windowing in avatarstream/features.py and the Wav2Lip inference
+  path are adapted from its lipasr.py and lipreal.py.
+- AIAvatar, Copyright 2025 Xu Ming (https://github.com/shibing624/AIAvatar)
+  avatarstream/wav2lip/ (model definition, mel features, face detection
+  package) is taken from its src/wav2lip directory, trimmed for inference.
+
+The Wav2Lip model architecture is from "A Lip Sync Expert Is All You Need for
+Speech to Lip Generation In the Wild" (Prajwal et al., ACM MM 2020),
+https://github.com/Rudrabha/Wav2Lip.
+
+The face detector in avatarstream/wav2lip/face_detection/ is from
+face-alignment by Adrian Bulat (https://github.com/1adrianb/face-alignment).
+
+tests/data/speech_16k.wav is an excerpt of LibriSpeech (CC BY 4.0,
+https://www.openslr.org/12).

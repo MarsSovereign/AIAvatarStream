@@ -1,0 +1,17 @@
+[project]
+name = "aiavatarstream"
+version = "0.1.0"
+description = "真人驱动的数字人直播：你说话，数字人实时对口型"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+extend-exclude = ["avatarstream/wav2lip"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]

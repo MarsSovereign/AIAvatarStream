@@ -1,0 +1,2 @@
+# 输出到 OBS 虚拟摄像头时需要
+pyvirtualcam>=0.11
