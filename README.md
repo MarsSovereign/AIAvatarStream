@@ -8,7 +8,7 @@
                      ┌────────────────────┴───────────────────┐
                      ▼                                        ▼
               AIAvatarStream                         OBS 直接采集变声后的声音
-      语音检测 → Wav2Lip 口型 → 合成画面           （设好同步偏移，和口型对齐）
+  语音检测 → 口型（MuseTalk / Wav2Lip）→ 合成画面  （设好同步偏移，和口型对齐）
                      │
                      ▼
      OBS 浏览器源 / 虚拟摄像头  ──►  直播伴侣 / 推流
@@ -26,10 +26,23 @@
 | 状态页实时显示延迟、音量和 OBS 该设的同步偏移 | |
 | 用一段闭嘴视频生成你自己的数字人形象 | |
 
+## 口型模型：MuseTalk 还是 Wav2Lip
+
+| | MuseTalk 1.5（推荐） | Wav2Lip |
+|---|---|---|
+| 嘴部画质 | 清晰，牙齿和唇形细节好（在 SD VAE 隐空间重绘下半张脸） | 偏糊 |
+| 显卡要求 | 高：官方数据 V100 上 30 帧/秒以上 | 低：RTX 3060 约 60 帧/秒 |
+| 模型大小 | 约 4 GB | 215 MB |
+| 商用 | 代码 MIT，官方声明模型可用于任何用途，包括商用 | 原作者声明禁止商用（见[合规](#合规与授权)） |
+| 已知缺点 | 胡子、唇色还原不完全；逐帧生成，偶有轻微抖动 | 嘴部糊，牙齿细节差 |
+
+两个模型共用同一套直播流程，启动时用 `--engine musetalk` 或 `--engine wav2lip` 切换。
+
 ## 硬件要求
 
-- Windows 10/11，NVIDIA 显卡。口型模型本身在 RTX 3060 上约 60 帧/秒，实时只需要 25 帧/秒。
-- 变声器和口型要**同时**跑在一张卡上，建议 **12 GB 显存起步**，RTX 4060 Ti 16G、4070 或更好会更稳。
+- Windows 10/11，NVIDIA 显卡。实时需要每秒生成 25 帧。
+- **MuseTalk**：建议口型单独用一张强卡（RTX 4070 / 3090 或更好，12 GB 显存以上），变声器放另一张卡，见[多张显卡](#多张显卡)。只有一张卡的话，先用 `gpus --test-lipsync` 实测能不能跟上。
+- **Wav2Lip**：RTX 3060 就够，变声器和口型可以挤在一张 12 GB 的卡上。
 - 一个虚拟声卡，比如免费的 [VB-CABLE](https://vb-audio.com/Cable/)。
 - 没有 N 卡也能装、能离线生成视频，但跑不动实时（CPU 大约 2 帧/秒）。
 
@@ -39,10 +52,10 @@
 
 1. 装 [Python 3.10 或 3.11](https://www.python.org/downloads/)，安装时勾选 “Add python.exe to PATH”。
 2. 下载本项目，双击 `scripts\install.bat`。
-   - 它会创建 `.venv`、装 GPU 版 PyTorch 和依赖，再下载模型（215 MB）和示例形象。
+   - 它会创建 `.venv`、装 GPU 版 PyTorch 和依赖，再下载 Wav2Lip 和 MuseTalk 模型（共约 4.3 GB）和示例形象，最后给示例形象生成 MuseTalk 数据。
    - RTX 50 系显卡先用记事本打开 `install.bat`，把 `cu124` 改成 `cu128`。
    - 国内下载 HuggingFace 慢的话，先在命令行执行 `set HF_ENDPOINT=https://hf-mirror.com` 再运行。
-3. 双击 `scripts\test_render.bat`：用自带的测试语音生成 `output\test_render.mp4`，看看口型效果和速度。
+3. 双击 `scripts\test_render.bat`：用自带的测试语音分别生成 MuseTalk 和 Wav2Lip 两个版本，放在 `output\` 里，可以对比画质，也能看出显卡速度。
 
 ### 手动安装（任何系统）
 
@@ -50,8 +63,9 @@
 python -m venv .venv
 .venv/Scripts/activate            # macOS / Linux: source .venv/bin/activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124   # 按显卡选
-pip install -r requirements.txt -r requirements-optional.txt
-python -m avatarstream download   # 模型和示例形象；--avatar all 下载全部三个
+pip install -r requirements.txt -r requirements-optional.txt -r requirements-musetalk.txt
+python -m avatarstream download --musetalk          # 模型和示例形象；--avatar all 下载全部三个
+python -m avatarstream prepare-musetalk --avatar data/wav2lip_avatar_glass_man
 ```
 
 ## 开播
@@ -72,22 +86,25 @@ python -m avatarstream download   # 模型和示例形象；--avatar all 下载�
 python -m avatarstream devices                       # 列出音频设备
 python -m avatarstream gpus --setup --test-lipsync   # 多显卡：给口型和变声分配显卡
 python -m avatarstream download --avatar all          # 下载模型和三个示例形象
+python -m avatarstream download --musetalk            # 加上 MuseTalk 模型（约 4 GB）
 python -m avatarstream make-avatar --video me.mp4 --out data/my_avatar
-python -m avatarstream render --audio a.wav --out out.mp4         # 离线生成，检查效果
-python -m avatarstream live --input-device "CABLE Output" --fp16  # 开始直播
+python -m avatarstream prepare-musetalk --avatar data/my_avatar   # 每个形象做一次
+python -m avatarstream render --engine musetalk --audio a.wav --out out.mp4   # 离线生成，检查效果
+python -m avatarstream live --engine musetalk --input-device "CABLE Output"   # 开始直播
 ```
 
 `live` 的常用参数：
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
+| `--engine` | `wav2lip` | 口型模型：`musetalk` 或 `wav2lip` |
 | `--input-device` | 系统默认 | 变声器输出到的设备，写编号或名字片段 |
 | `--device` | `auto` | 用哪张卡。`auto` 按 `gpu_config.json` 的分配；也可以写 `cuda:1` 临时指定 |
 | `--avatar` | `data/wav2lip_avatar_glass_man` | 形象目录 |
 | `--batch-size` | 8 | 每批生成多少帧。越小延迟越低，越大越省显卡。直播建议 4 到 8 |
-| `--fp16` | 关 | N 卡半精度，更快更省显存，推荐打开 |
+| `--fp16` | 关 | Wav2Lip 在 N 卡上用半精度，更快更省显存。MuseTalk 在 N 卡上总是用半精度 |
 | `--vad-db` | -45 | 音量高于它才算说话。没说话嘴也在动，就调高到 -40 或 -38 |
-| `--blend` | `lower` | `lower` 只换嘴和下巴，眼睛保持原画质；`full` 换整张脸 |
+| `--blend` | `lower` | 仅 Wav2Lip：`lower` 只换嘴和下巴，眼睛保持原画质；`full` 换整张脸。MuseTalk 总是用人脸分割出的下半张脸 |
 | `--virtualcam` | 关 | 同时输出到 OBS 虚拟摄像头（需要 `pyvirtualcam`） |
 | `--audio-out-device` | 无 | 把和画面严格对齐的声音送到另一个输出设备，OBS 采集它就不用设偏移 |
 | `--input-file` | 无 | 用音频文件代替麦克风，彩排用，加 `--loop` 循环 |
@@ -112,7 +129,7 @@ python -m avatarstream live --input-device "CABLE Output" --fp16  # 开始直播
 | 任务 | 选项 | 负载 |
 |---|---|---|
 | 口型 | Wav2Lip | 2 |
-| 口型 | MuseTalk（计划中） | 5 |
+| 口型 | MuseTalk | 5 |
 | 变声 | RVC | 2 |
 | 变声 | Seed-VC | 5 |
 
@@ -158,7 +175,12 @@ python -m avatarstream live --device cuda:0                   # 临时指定，�
    ```
    - 默认用 S3FD 检测人脸（第一次会自动下载 85 MB 权重），`--detector haar` 不用下载但不如它准。
    - 下巴被切掉的话，加大下边距：`--pads 0 20 0 0`。
-3. 开播时加 `--avatar data/my_avatar`。
+3. 用 MuseTalk 的话，再给它生成 MuseTalk 数据（人脸关键点、隐空间编码、嘴部融合遮罩），每个形象做一次：
+   ```bash
+   python -m avatarstream prepare-musetalk --avatar data/my_avatar
+   ```
+   嘴张得不够大或嘴部区域偏上，可以加 `--bbox-shift 5` 这类正数把区域往下挪，负数往上挪。
+4. 开播时加 `--avatar data/my_avatar`。
 
 待机画面会正放、倒放循环，所以视频首尾不需要刻意衔接。
 
@@ -167,7 +189,7 @@ python -m avatarstream live --device cuda:0                   # 临时指定，�
 - **形象和声音必须有授权。** 不要复刻明星或任何真实他人的长相和声音，否则侵犯肖像权和声音权益。推荐 AI 生成的虚拟人，配你自己训练或有授权的音色。
 - **平台规则（以平台最新公告为准）。** 抖音对虚拟人直播的要求是：使用者实名认证、由真人驱动并实时互动、不允许完全由 AI 驱动，直播间要显著标识数字人。本项目的用法是真人说话驱动，但标识、实名这些需要你在平台侧完成。视频号等平台的规则可能更严，开播前请核实。
 - **AI 生成内容标识。** 《人工智能生成合成内容标识办法》自 2025 年 9 月 1 日起施行，直播画面里请加上“数字人 / AI 生成”的提示。
-- **模型权重。** `wav2lip.pth` 来自 [shibing624/ai-avatar-wav2lip](https://huggingface.co/shibing624/ai-avatar-wav2lip)，标注为 Apache-2.0。但 Wav2Lip 原作者声明，用 LRS2 数据集训练的官方模型禁止商用，这个 256 版本用什么数据训练的没有公开说明。**带货等商业用途前，请自行评估或换用授权明确的模型。**
+- **模型权重。** MuseTalk：代码 MIT 协议，官方声明训练好的模型可用于任何用途，包括商用。它依赖的 sd-vae-ft-mse（MIT）、whisper-tiny（MIT）、人脸分割 BiSeNet（MIT）、face-alignment（BSD-3）各有自己的协议，商用前请自行确认一遍。Wav2Lip：`wav2lip.pth` 来自 [shibing624/ai-avatar-wav2lip](https://huggingface.co/shibing624/ai-avatar-wav2lip)，标注为 Apache-2.0。但 Wav2Lip 原作者声明，用 LRS2 数据集训练的官方模型禁止商用，这个 256 版本用什么数据训练的没有公开说明。**做带货等商业用途，建议用 MuseTalk。**
 
 ## 开发与测试
 
@@ -186,15 +208,18 @@ ruff check .
 - **实时流水线**（用替身模型）：稳定输出 25 帧/秒；输入的每个音频采样都按顺序、无缺漏地随画面输出；预览、状态页和 MJPEG 流可以访问。
 - **`live` 命令**：完整跑一遍并录成 mp4，检查音画时长一致。
 - **显卡分配**（用模拟的强卡和弱卡）：负载重的任务分到快的卡；配置按 UUID 找卡，显卡编号变了也能找对；交互式设置里可以逐项改掉推荐；变声器启动脚本里写入了正确的 UUID；实测口型跑不动的卡会被自动避开。
+- **MuseTalk 音频窗口**：流式切出的每一帧 50×384 特征，和 MuseTalk 官方离线实现的取法逐值一致（用可追踪的替身特征验证）；用真实 Whisper 模型时，和离线特征在零偏移处最相似（相似度 0.9 以上），错开一帧就明显变差，说明没有一帧的错位。
+- **MuseTalk 真实模型**（CPU 上几分钟）：生成的人脸框和 Wav2Lip 检测到的是同一张脸；说话时嘴部被重绘且逐帧在动；遮罩以上的部分（眼睛等）与原画逐像素一致。
 - **形象生成**：S3FD 和 Haar 检测出的人脸框，与示例形象自带的人脸框重合度分别超过 0.8 和 0.6。
 - **真实模型**：用真人语音驱动时，嘴部的运动明显大于待机视频本身的运动；离线渲染的音画时长一致。
 
-**没有自动测试的部分**：GPU 上的实时性能和多卡的真实运行（分配逻辑已用模拟显卡测过）、真实麦克风和虚拟声卡、虚拟摄像头输出。这些需要在你的 Windows 电脑上验证，步骤见[直播搭建指南](docs/直播搭建指南.md)里的“开播前检查”。
+**没有自动测试的部分**：MuseTalk 和 Wav2Lip 在 GPU 上的实时性能和多卡的真实运行（分配逻辑已用模拟显卡测过）、真实麦克风和虚拟声卡、虚拟摄像头输出。这些需要在你的 Windows 电脑上验证，步骤见[直播搭建指南](docs/直播搭建指南.md)里的“开播前检查”。
 
 ## 致谢与许可
 
 Apache License 2.0，见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
 
-- 口型推理和音频分帧改编自 [LiveTalking](https://github.com/lipku/LiveTalking) 和 [AIAvatar](https://github.com/shibing624/AIAvatar)（均为 Apache-2.0）。
+- MuseTalk 推理、人脸框规则、嘴部融合和人脸分割模型来自 [MuseTalk](https://github.com/TMElyralab/MuseTalk)（MIT，Copyright (c) 2024 Tencent Music Entertainment Group）；人脸分割网络最初来自 [face-parsing.PyTorch](https://github.com/zllrunning/face-parsing.PyTorch)（MIT）。
+- Wav2Lip 口型推理和音频分帧改编自 [LiveTalking](https://github.com/lipku/LiveTalking) 和 [AIAvatar](https://github.com/shibing624/AIAvatar)（均为 Apache-2.0）。
 - 模型结构来自 [Wav2Lip](https://github.com/Rudrabha/Wav2Lip)，人脸检测来自 [face-alignment](https://github.com/1adrianb/face-alignment)。
 - 测试语音片段取自 [LibriSpeech](https://www.openslr.org/12)（CC BY 4.0）。

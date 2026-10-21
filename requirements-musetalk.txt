@@ -1,0 +1,6 @@
+# MuseTalk 口型模型需要
+diffusers>=0.30
+transformers>=4.39
+safetensors>=0.4
+face-alignment>=1.4
+opencv-python>=4.8,<5  # face-alignment would otherwise pull OpenCV 5, which drops the Haar detector

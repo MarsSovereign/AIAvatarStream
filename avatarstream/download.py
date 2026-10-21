@@ -17,10 +17,23 @@ AVATARS = {
 }
 
 
-def hf_url(filename: str) -> str:
+# MuseTalk 1.5 and the models it builds on: (repo, file in repo, path under models/musetalk)
+MUSETALK_FILES = [
+    ("TMElyralab/MuseTalk", "musetalkV15/musetalk.json", "musetalkV15/musetalk.json"),
+    ("TMElyralab/MuseTalk", "musetalkV15/unet.pth", "musetalkV15/unet.pth"),
+    ("stabilityai/sd-vae-ft-mse", "config.json", "sd-vae/config.json"),
+    ("stabilityai/sd-vae-ft-mse", "diffusion_pytorch_model.safetensors", "sd-vae/diffusion_pytorch_model.safetensors"),
+    ("openai/whisper-tiny", "config.json", "whisper/config.json"),
+    ("openai/whisper-tiny", "preprocessor_config.json", "whisper/preprocessor_config.json"),
+    ("openai/whisper-tiny", "model.safetensors", "whisper/model.safetensors"),
+    ("ManyOtherFunctions/face-parse-bisent", "79999_iter.pth", "face-parse-bisent/79999_iter.pth"),
+]
+
+
+def hf_url(filename: str, repo: str = REPO) -> str:
     # Set HF_ENDPOINT=https://hf-mirror.com if huggingface.co is not reachable.
     base = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
-    return f"{base}/{REPO}/resolve/main/{filename}"
+    return f"{base}/{repo}/resolve/main/{filename}"
 
 
 def _fetch(url: str, dest: str) -> None:
@@ -46,6 +59,17 @@ def download_model(models_dir: str = "models") -> str:
     else:
         _fetch(hf_url(MODEL_FILE), dest)
     return dest
+
+
+def download_musetalk(target_dir: str = "models/musetalk") -> str:
+    for repo, filename, rel in MUSETALK_FILES:
+        dest = os.path.join(target_dir, rel)
+        if os.path.exists(dest):
+            continue
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        _fetch(hf_url(filename, repo), dest)
+    log.info("MuseTalk 模型已就绪：%s", target_dir)
+    return target_dir
 
 
 def download_avatar(name: str, data_dir: str = "data") -> str:

@@ -37,10 +37,33 @@ class VideoFrame:
         return np.concatenate([a.pcm_src for a in self.audio])
 
 
+class Wav2LipBackend:
+    """Mel features, Wav2Lip on the face crop, pasted back with the Compositor."""
+
+    name = "wav2lip"
+
+    def __init__(self, model, avatar: Avatar, src_sr: int, batch_size: int, compositor: Optional[Compositor] = None):
+        self.model = model
+        self.avatar = avatar
+        self.batch_size = batch_size
+        self.compositor = compositor or Compositor()
+        self.featurizer = MelFeaturizer(batch_size, src_sr)
+
+    def warm_up(self) -> float:
+        self.featurizer.warm_up()
+        return self.model.warm_up(self.batch_size)
+
+    def render(self, idxs: list[int], feats: list) -> list[np.ndarray]:
+        preds = self.model.infer(np.stack([self.avatar.faces[i] for i in idxs]), np.stack(feats))
+        return [self.compositor.paste(self.avatar.frames[i], p, self.avatar.coords[i]) for i, p in zip(idxs, preds)]
+
+
 class LipSyncEngine:
     """Synchronous core. `process` takes 2*batch_size audio frames and returns batch_size video frames.
 
     Batches where nobody is speaking skip the model and show the idle loop.
+    The model-specific work (features, inference, pasting) lives in a backend;
+    without one, a Wav2Lip backend is built from `model`.
     """
 
     def __init__(
@@ -51,31 +74,29 @@ class LipSyncEngine:
         batch_size: int = 8,
         gate: Optional[EnergyGate] = None,
         compositor: Optional[Compositor] = None,
+        backend=None,
     ):
-        self.model = model
         self.avatar = avatar
-        self.batch_size = batch_size
+        self.backend = backend or Wav2LipBackend(model, avatar, src_sr, batch_size, compositor)
+        self.batch_size = self.backend.batch_size
         self.gate = gate or EnergyGate()
-        self.compositor = compositor or Compositor()
-        self.featurizer = MelFeaturizer(batch_size, src_sr)
         self._index = 0
         self.infer_seconds = 0.0
         self.infer_frames = 0
 
     @property
     def frames_per_step(self) -> int:
-        return self.featurizer.frames_per_step
+        return self.backend.featurizer.frames_per_step
 
     def warm_up(self) -> float:
         """Prepares the audio features and the model so the first sentence is not delayed. Returns seconds per batch."""
-        self.featurizer.warm_up()
-        return self.model.warm_up(self.batch_size)
+        return self.backend.warm_up()
 
     def process(self, frames: list[AudioFrame]) -> list[VideoFrame]:
         for f in frames:
             if f.speech is None:
                 f.speech = self.gate(f.pcm)
-        items = self.featurizer.step(frames)
+        items = self.backend.featurizer.step(frames)
         idxs = [self.avatar.mirror_index(self._index + i) for i in range(len(items))]
         speaking = [any(a.speech for a in pair) for _, pair in items]
         self._index += len(items)
@@ -86,17 +107,10 @@ class LipSyncEngine:
             ]
 
         t = time.perf_counter()
-        faces = np.stack([self.avatar.faces[i] for i in idxs])
-        mels = np.stack([mel for mel, _ in items])
-        preds = self.model.infer(faces, mels)
+        images = self.backend.render(idxs, [feat for feat, _ in items])
         self.infer_seconds += time.perf_counter() - t
         self.infer_frames += len(items)
-
-        out = []
-        for idx, pred, (_, pair), spk in zip(idxs, preds, items, speaking):
-            image = self.compositor.paste(self.avatar.frames[idx], pred, self.avatar.coords[idx])
-            out.append(VideoFrame(image, pair, spk, idx))
-        return out
+        return [VideoFrame(img, pair, spk, idx) for img, idx, (_, pair), spk in zip(images, idxs, items, speaking)]
 
     @property
     def infer_fps(self) -> float:

@@ -11,7 +11,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 130
-extend-exclude = ["avatarstream/wav2lip"]
+extend-exclude = ["avatarstream/wav2lip", "avatarstream/musetalk/face_parsing/model.py", "avatarstream/musetalk/face_parsing/resnet.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]

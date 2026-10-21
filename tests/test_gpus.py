@@ -65,8 +65,8 @@ def test_interactive_setup_lets_the_user_override(two_gpus, monkeypatch, tmp_pat
     rvc = tmp_path / "RVC" / "go-realtime-gui.bat"
     rvc.parent.mkdir()
     rvc.write_text("@echo off\n")
-    # RVC; lip sync: accept (strong card 0); voice changer: override the weak card with 0; launcher path.
-    _answers(monkeypatch, "1", "", "0", str(rvc))
+    # Wav2Lip; RVC; lip sync: accept (strong card 0); voice changer: override the weak card with 0; launcher path.
+    _answers(monkeypatch, "1", "1", "", "0", str(rvc))
     cli.main(["gpus", "--setup"])
     out = capsys.readouterr().out
     assert "推荐方案" in out and "同一张卡" in out
@@ -102,7 +102,7 @@ def test_assign_and_auto(two_gpus, tmp_path):
 def test_measured_lipsync_load_moves_it_off_a_card_that_cannot_keep_up(two_gpus, tmp_path, monkeypatch, capsys):
     (tmp_path / "models").mkdir()
     (tmp_path / "models" / "wav2lip.pth").write_bytes(b"")
-    monkeypatch.setattr(cli, "_test_lipsync", lambda gpus, m, b: {"GPU-aaaa": 0.2, "GPU-bbbb": 0.9})
+    monkeypatch.setattr(cli, "_test_lipsync", lambda gpus, m, b, engine="wav2lip": {"GPU-aaaa": 0.2, "GPU-bbbb": 0.9})
     # Seed-VC is heavy, so the plan first puts lip sync on the weak card, where it cannot keep up.
     cli.main(["gpus", "--auto", "--test-lipsync", "--voice-changer", "seed-vc"])
     cfg = json.loads((tmp_path / "gpu_config.json").read_text(encoding="utf-8"))
@@ -120,3 +120,15 @@ def test_bad_assign_is_explained(two_gpus):
 def test_python_launcher_is_refused(tmp_path):
     with pytest.raises(ValueError):
         G.write_launcher(str(tmp_path / "real-time-gui.py"), STRONG, str(tmp_path / "x.bat"))
+
+
+def test_setup_with_musetalk_puts_it_on_the_strong_card(two_gpus, monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(cli, "_run_lipsync_test", lambda args, found, engine: seen.setdefault("engine", engine) and {})
+    # MuseTalk; RVC; accept both recommendations; no launcher.
+    _answers(monkeypatch, "2", "1", "", "", "")
+    cli.main(["gpus", "--setup", "--test-lipsync"])
+    cfg = json.loads((tmp_path / "gpu_config.json").read_text(encoding="utf-8"))
+    assert cfg["kinds"] == {"lipsync": "musetalk", "voice_changer": "rvc"}
+    assert (cfg["tasks"]["lipsync"]["uuid"], cfg["tasks"]["voice_changer"]["uuid"]) == ("GPU-aaaa", "GPU-bbbb")
+    assert seen["engine"] == "musetalk"  # the speed test ran for the chosen model

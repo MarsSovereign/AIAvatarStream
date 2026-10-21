@@ -18,5 +18,21 @@ https://github.com/Rudrabha/Wav2Lip.
 The face detector in avatarstream/wav2lip/face_detection/ is from
 face-alignment by Adrian Bulat (https://github.com/1adrianb/face-alignment).
 
+avatarstream/musetalk/ follows MuseTalk (https://github.com/TMElyralab/MuseTalk),
+MIT License, Copyright (c) 2024 Tencent Music Entertainment Group:
+the UNet/VAE/Whisper inference, the landmark crop rule, the "jaw" face-parsing
+mask and the blending. avatarstream/musetalk/face_parsing/model.py and resnet.py
+are from MuseTalk, originally from face-parsing.PyTorch by zllrunning (MIT).
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions: The above copyright
+  notice and this permission notice shall be included in all copies or
+  substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS",
+  WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+
 tests/data/speech_16k.wav is an excerpt of LibriSpeech (CC BY 4.0,
 https://www.openslr.org/12).

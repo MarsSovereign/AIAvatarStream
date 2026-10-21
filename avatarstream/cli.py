@@ -25,7 +25,10 @@ def _setup_logging(verbose: bool) -> None:
 
 def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--avatar", default="data/wav2lip_avatar_glass_man", help="形象目录")
+    p.add_argument("--engine", choices=["wav2lip", "musetalk"], default="wav2lip",
+                   help="口型模型：wav2lip 轻快；musetalk 嘴部更清晰、可商用，但更吃显卡")
     p.add_argument("--model", default="models/wav2lip.pth", help="Wav2Lip 模型文件")
+    p.add_argument("--musetalk-dir", default="models/musetalk", help="MuseTalk 模型目录")
     p.add_argument("--device", default="auto",
                    help="auto 表示按 gpu_config.json 的分配（没有就自动选）；也可以直接写 cuda:1 / cpu")
     p.add_argument("--fp16", action="store_true", help="N 卡上用半精度，更快、更省显存")
@@ -46,12 +49,28 @@ def _build_engine(args, src_sr: int):
     from .model import LipSyncModel
     from .vad import EnergyGate
 
-    for path, hint in ((args.model, "python -m avatarstream download"), (args.avatar, "python -m avatarstream download")):
-        if not os.path.exists(path):
-            sys.exit(f"找不到 {path}。先运行：{hint}")
+    if not os.path.exists(args.avatar):
+        sys.exit(f"找不到 {args.avatar}。先运行：python -m avatarstream download")
+    gate = EnergyGate(args.vad_db, args.hangover_ms)
+    if args.engine == "musetalk":
+        from .musetalk import MuseTalkBackend
+        from .musetalk.avatar import load as load_musetalk_data
+        from .musetalk.model import MuseTalkModel, missing_files
+
+        if missing_files(args.musetalk_dir):
+            sys.exit("MuseTalk 模型还没下载。先运行：python -m avatarstream download --musetalk")
+        avatar = load_avatar(args.avatar)
+        try:
+            data = load_musetalk_data(args.avatar, avatar)
+        except (FileNotFoundError, ValueError) as e:
+            sys.exit(str(e))
+        model = MuseTalkModel(args.musetalk_dir, _lipsync_device(args))
+        backend = MuseTalkBackend(model, avatar, data, src_sr, args.batch_size)
+        return LipSyncEngine(None, avatar, src_sr, args.batch_size, gate, backend=backend), model, avatar
+    if not os.path.exists(args.model):
+        sys.exit(f"找不到 {args.model}。先运行：python -m avatarstream download")
     model = LipSyncModel(args.model, _lipsync_device(args), args.fp16)
     avatar = load_avatar(args.avatar)
-    gate = EnergyGate(args.vad_db, args.hangover_ms)
     engine = LipSyncEngine(model, avatar, src_sr, args.batch_size, gate, Compositor(args.blend, args.feather))
     return engine, model, avatar
 
@@ -75,9 +94,11 @@ def cmd_devices(args) -> None:
 
 
 def cmd_download(args) -> None:
-    from .download import AVATARS, download_avatar, download_model
+    from .download import AVATARS, download_avatar, download_model, download_musetalk
 
     download_model(args.models_dir)
+    if args.musetalk:
+        download_musetalk(os.path.join(args.models_dir, "musetalk"))
     names = list(AVATARS) if args.avatar == "all" else [args.avatar]
     for n in names:
         print("形象：", download_avatar(n, args.data_dir))
@@ -91,6 +112,19 @@ def cmd_make_avatar(args) -> None:
     device = resolve_device("lipsync", args.device)
     make_avatar(args.video, args.out, args.detector, tuple(args.pads), args.max_seconds,
                 args.resize_height, not args.no_smooth, device=None if device == "auto" else device)
+
+
+def cmd_prepare_musetalk(args) -> None:
+    from .gpus import resolve_device
+    from .musetalk.avatar import prepare
+    from .musetalk.model import MuseTalkModel, missing_files
+
+    if missing_files(args.musetalk_dir):
+        sys.exit("MuseTalk 模型还没下载。先运行：python -m avatarstream download --musetalk")
+    device = resolve_device("lipsync", args.device)
+    model = MuseTalkModel(args.musetalk_dir, None if device == "auto" else device)
+    prepare(args.avatar, model, os.path.join(args.musetalk_dir, "face-parse-bisent", "79999_iter.pth"),
+            bbox_shift=args.bbox_shift, smooth=not args.no_smooth)
 
 
 def cmd_render(args) -> None:
@@ -133,7 +167,8 @@ def cmd_live(args) -> None:
     log.info("每批 %d 帧推理 %.0f ms（实时上限 %.0f ms），预计延迟约 %.0f ms",
              args.batch_size, per_batch * 1000, budget * 1000, est * 1000)
     if per_batch > budget:
-        log.warning("这台机器跑不动实时：一批推理比一批画面的时长还长。换 N 卡、加 --fp16，或调大 --batch-size。")
+        log.warning("这台机器跑不动实时：一批推理比一批画面的时长还长。可以把口型放到单独的强卡上（gpus --setup）、"
+                    "调大 --batch-size，Wav2Lip 加 --fp16，或者换成更轻的 --engine wav2lip。")
 
     stats = Stats()
     sinks = []
@@ -197,14 +232,35 @@ def _ask(prompt: str, default: str = "") -> str:
     return reply or default
 
 
-def _test_lipsync(gpus, model_path: str, batch_size: int) -> dict:
+def _run_lipsync_test(args, found, engine: str) -> dict:
+    if engine == "musetalk":
+        from .musetalk.model import missing_files
+
+        if missing_files(args.musetalk_dir):
+            sys.exit("MuseTalk 模型还没下载。先运行：python -m avatarstream download --musetalk")
+        path = args.musetalk_dir
+    else:
+        if not os.path.exists(args.model):
+            sys.exit(f"找不到 {args.model}，先运行 python -m avatarstream download")
+        path = args.model
+    print(f"\n在每张卡上实测 {engine}：")
+    return _test_lipsync(found, path, args.batch_size, engine)
+
+
+def _test_lipsync(gpus, model_path: str, batch_size: int, engine: str = "wav2lip") -> dict:
     from .engine import VIDEO_FPS
-    from .model import LipSyncModel
 
     budget = batch_size / VIDEO_FPS
     results = {}
     for g in gpus:
-        m = LipSyncModel(model_path, g.device, fp16=True)
+        if engine == "musetalk":
+            from .musetalk.model import MuseTalkModel
+
+            m = MuseTalkModel(model_path, g.device)
+        else:
+            from .model import LipSyncModel
+
+            m = LipSyncModel(model_path, g.device, fp16=True)
         per_batch = min(m.warm_up(batch_size) for _ in range(3))
         results[g.uuid] = per_batch / budget
         print(f"  [{gpus.index(g)}] {g.name}：每批 {batch_size} 帧 {per_batch * 1000:.0f} ms，"
@@ -230,30 +286,32 @@ def cmd_gpus(args) -> None:
 
     config = G.load_config()
     kinds = dict(config.get("kinds") or {"lipsync": "wav2lip", "voice_changer": "rvc"})
-    kinds["lipsync"] = "wav2lip"
+    if args.lipsync_engine:
+        kinds["lipsync"] = args.lipsync_engine
     if args.voice_changer:
         kinds["voice_changer"] = args.voice_changer
 
-    load = {}
-    if args.test_lipsync:
-        if not os.path.exists(args.model):
-            sys.exit(f"找不到 {args.model}，先运行 python -m avatarstream download")
-        print("\n实测口型模型：")
-        load = _test_lipsync(found, args.model, args.batch_size)
-
     if not (args.setup or args.auto or args.assign):
+        if args.test_lipsync:
+            _run_lipsync_test(args, found, kinds["lipsync"])
         current = config.get("tasks") or {}
         print("\n当前分配：" if current else "\n还没有分配。运行 python -m avatarstream gpus --setup 开始设置。")
         for task, entry in current.items():
             print(f"  {G.TASKS[task]}：{entry['name'] if entry else 'CPU'}")
         return
 
+    if args.setup and not args.lipsync_engine:
+        engines = list(DEMAND_KINDS["lipsync"])
+        choice = _ask("\n口型用哪个模型？1 = Wav2Lip（轻），2 = MuseTalk（重，画质好）",
+                      str(engines.index(kinds.get("lipsync", "wav2lip")) + 1))
+        kinds["lipsync"] = engines[int(choice) - 1] if choice.isdigit() and 1 <= int(choice) <= len(engines) else "wav2lip"
     if args.setup and not args.voice_changer:
         names = list(DEMAND_KINDS["voice_changer"])
         choice = _ask("\n你用哪个变声器？1 = RVC，2 = Seed-VC，3 = 其他",
                       str(names.index(kinds.get("voice_changer", "rvc")) + 1))
         kinds["voice_changer"] = names[int(choice) - 1] if choice.isdigit() and 1 <= int(choice) <= len(names) else "rvc"
 
+    load = _run_lipsync_test(args, found, kinds["lipsync"]) if args.test_lipsync else {}
     plan = G.recommend(found, kinds)
     lip = plan["lipsync"]
     if lip is not None and load.get(lip.uuid, 0) > 0.7:
@@ -317,7 +375,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--avatar", default="glass_man", help="glass_man / female_model / long_hair_girl / all")
     s.add_argument("--models-dir", default="models")
     s.add_argument("--data-dir", default="data")
+    s.add_argument("--musetalk", action="store_true", help="同时下载 MuseTalk 模型（约 4 GB）")
     s.set_defaults(func=cmd_download)
+
+    s = sub.add_parser("prepare-musetalk", help="给形象生成 MuseTalk 需要的数据（每个形象做一次）")
+    s.add_argument("--avatar", required=True, help="形象目录，例如 data/my_avatar")
+    s.add_argument("--musetalk-dir", default="models/musetalk")
+    s.add_argument("--device", default="auto")
+    s.add_argument("--bbox-shift", type=int, default=0, help="嘴部区域上下微调（像素）。张嘴不够就调成正数")
+    s.add_argument("--no-smooth", action="store_true", help="不对人脸框做时间平滑")
+    s.set_defaults(func=cmd_prepare_musetalk)
 
     s = sub.add_parser("make-avatar", help="用一段闭嘴视频生成自己的形象")
     s.add_argument("--video", required=True)
@@ -336,12 +403,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--auto", action="store_true", help="直接采用推荐方案并保存")
     s.add_argument("--assign", nargs="+", metavar="任务=编号",
                    help="手动指定，例如 lipsync=1 voice_changer=0（编号见列表）")
+    s.add_argument("--lipsync-engine", choices=list(DEMAND_KINDS["lipsync"]), default=None,
+                   help="口型模型，决定它对显卡的要求")
     s.add_argument("--voice-changer", choices=list(DEMAND_KINDS["voice_changer"]), default=None,
                    help="你用的变声器，决定它对显卡的要求")
     s.add_argument("--voice-changer-script", default=None,
                    help="变声器的启动脚本（例如 RVC 的 go-realtime-gui.bat），会生成一个锁定显卡的启动脚本")
     s.add_argument("--test-lipsync", action="store_true", help="在每张卡上实测口型模型的速度")
     s.add_argument("--model", default="models/wav2lip.pth")
+    s.add_argument("--musetalk-dir", default="models/musetalk")
     s.add_argument("--batch-size", type=int, default=8)
     s.add_argument("--no-benchmark", action="store_true", help="不跑性能测试，只按硬件参数排序")
     s.set_defaults(func=cmd_gpus)
