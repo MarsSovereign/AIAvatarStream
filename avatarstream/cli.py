@@ -26,7 +26,7 @@ def _setup_logging(verbose: bool) -> None:
 def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--avatar", default="data/wav2lip_avatar_glass_man", help="形象目录")
     p.add_argument("--model", default="models/wav2lip.pth", help="Wav2Lip 模型文件")
-    p.add_argument("--device", default="auto", help="auto / cuda / cpu / mps")
+    p.add_argument("--device", default="auto", help="auto / cuda / cuda:1（第二张显卡）/ cpu / mps")
     p.add_argument("--fp16", action="store_true", help="N 卡上用半精度，更快、更省显存")
     p.add_argument("--batch-size", type=int, default=8,
                    help="每批生成的帧数。越小延迟越低，越大显卡越省力（直播建议 4 到 8）")

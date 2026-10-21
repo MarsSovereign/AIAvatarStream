@@ -33,7 +33,7 @@ def _load_checkpoint(path: str):
 class LipSyncModel:
     def __init__(self, path: str, device: str | None = None, fp16: bool = False):
         self.device = pick_device(device)
-        self.fp16 = fp16 and self.device == "cuda"
+        self.fp16 = fp16 and self.device.startswith("cuda")
         ckpt = _load_checkpoint(path)
         state = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
         state = {k.replace("module.", ""): v for k, v in state.items()}
