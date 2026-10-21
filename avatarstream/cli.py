@@ -26,7 +26,8 @@ def _setup_logging(verbose: bool) -> None:
 def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--avatar", default="data/wav2lip_avatar_glass_man", help="形象目录")
     p.add_argument("--model", default="models/wav2lip.pth", help="Wav2Lip 模型文件")
-    p.add_argument("--device", default="auto", help="auto / cuda / cuda:1（第二张显卡）/ cpu / mps")
+    p.add_argument("--device", default="auto",
+                   help="auto 表示按 gpu_config.json 的分配（没有就自动选）；也可以直接写 cuda:1 / cpu")
     p.add_argument("--fp16", action="store_true", help="N 卡上用半精度，更快、更省显存")
     p.add_argument("--batch-size", type=int, default=8,
                    help="每批生成的帧数。越小延迟越低，越大显卡越省力（直播建议 4 到 8）")
@@ -48,11 +49,23 @@ def _build_engine(args, src_sr: int):
     for path, hint in ((args.model, "python -m avatarstream download"), (args.avatar, "python -m avatarstream download")):
         if not os.path.exists(path):
             sys.exit(f"找不到 {path}。先运行：{hint}")
-    model = LipSyncModel(args.model, args.device, args.fp16)
+    model = LipSyncModel(args.model, _lipsync_device(args), args.fp16)
     avatar = load_avatar(args.avatar)
     gate = EnergyGate(args.vad_db, args.hangover_ms)
     engine = LipSyncEngine(model, avatar, src_sr, args.batch_size, gate, Compositor(args.blend, args.feather))
     return engine, model, avatar
+
+
+def _lipsync_device(args) -> str:
+    from .gpus import resolve_device
+
+    device = resolve_device("lipsync", args.device)
+    if device.startswith("cuda"):
+        import torch
+
+        idx = int(device.split(":")[1]) if ":" in device else torch.cuda.current_device()
+        log.info("口型生成使用显卡 %s：%s", device, torch.cuda.get_device_name(idx))
+    return device
 
 
 def cmd_devices(args) -> None:
@@ -73,8 +86,11 @@ def cmd_download(args) -> None:
 def cmd_make_avatar(args) -> None:
     from .make_avatar import make_avatar
 
+    from .gpus import resolve_device
+
+    device = resolve_device("lipsync", args.device)
     make_avatar(args.video, args.out, args.detector, tuple(args.pads), args.max_seconds,
-                args.resize_height, not args.no_smooth)
+                args.resize_height, not args.no_smooth, device=None if device == "auto" else device)
 
 
 def cmd_render(args) -> None:
@@ -171,6 +187,124 @@ def cmd_live(args) -> None:
         sys.exit(1)
 
 
+from .gpus import DEMAND as DEMAND_KINDS  # noqa: E402  (no torch import at module load)
+
+LAUNCHER_PATH = os.path.join("scripts", "start_voice_changer.bat")
+
+
+def _ask(prompt: str, default: str = "") -> str:
+    reply = input(f"{prompt}{f' [回车 = {default}]' if default else ''}：").strip()
+    return reply or default
+
+
+def _test_lipsync(gpus, model_path: str, batch_size: int) -> dict:
+    from .engine import VIDEO_FPS
+    from .model import LipSyncModel
+
+    budget = batch_size / VIDEO_FPS
+    results = {}
+    for g in gpus:
+        m = LipSyncModel(model_path, g.device, fp16=True)
+        per_batch = min(m.warm_up(batch_size) for _ in range(3))
+        results[g.uuid] = per_batch / budget
+        print(f"  [{gpus.index(g)}] {g.name}：每批 {batch_size} 帧 {per_batch * 1000:.0f} ms，"
+              f"占实时预算 {per_batch / budget:.0%}")
+        del m
+    return results
+
+
+def cmd_gpus(args) -> None:
+    from . import gpus as G
+
+    found = G.list_gpus()
+    if not found:
+        print("没有检测到 NVIDIA 显卡（或者装的是 CPU 版 PyTorch）。口型只能用 CPU 跑，速度不够直播。")
+        return
+    if not args.no_benchmark:
+        print("正在测试每张显卡的性能……")
+        for g in found:
+            G.benchmark(g)
+    print("\n检测到的显卡：")
+    for i, g in enumerate(found):
+        print(f"  [{i}] {g.label()}")
+
+    config = G.load_config()
+    kinds = dict(config.get("kinds") or {"lipsync": "wav2lip", "voice_changer": "rvc"})
+    kinds["lipsync"] = "wav2lip"
+    if args.voice_changer:
+        kinds["voice_changer"] = args.voice_changer
+
+    load = {}
+    if args.test_lipsync:
+        if not os.path.exists(args.model):
+            sys.exit(f"找不到 {args.model}，先运行 python -m avatarstream download")
+        print("\n实测口型模型：")
+        load = _test_lipsync(found, args.model, args.batch_size)
+
+    if not (args.setup or args.auto or args.assign):
+        current = config.get("tasks") or {}
+        print("\n当前分配：" if current else "\n还没有分配。运行 python -m avatarstream gpus --setup 开始设置。")
+        for task, entry in current.items():
+            print(f"  {G.TASKS[task]}：{entry['name'] if entry else 'CPU'}")
+        return
+
+    if args.setup and not args.voice_changer:
+        names = list(DEMAND_KINDS["voice_changer"])
+        choice = _ask("\n你用哪个变声器？1 = RVC，2 = Seed-VC，3 = 其他",
+                      str(names.index(kinds.get("voice_changer", "rvc")) + 1))
+        kinds["voice_changer"] = names[int(choice) - 1] if choice.isdigit() and 1 <= int(choice) <= len(names) else "rvc"
+
+    plan = G.recommend(found, kinds)
+    lip = plan["lipsync"]
+    if lip is not None and load.get(lip.uuid, 0) > 0.7:
+        # The recommended card is too slow for lip sync: move it to the fastest card that keeps up.
+        fast_enough = [g for g in found if load.get(g.uuid, 1) <= 0.7]
+        if fast_enough:
+            best = max(fast_enough, key=lambda g: g.speed)
+            other = plan["voice_changer"]
+            plan["lipsync"], plan["voice_changer"] = best, (lip if other is best else other)
+            print(f"\n实测发现 {lip.name} 跑口型太吃力，已改为 {best.name}。")
+    print("\n推荐方案（负载重的任务放在更快的卡上）：")
+    for task, g in plan.items():
+        level = DEMAND_KINDS[task].get(kinds.get(task, ""), 3)
+        print(f"  {G.TASKS[task]}（负载 {level}/5）→ [{found.index(g)}] {g.name}")
+
+    if args.assign:
+        for item in args.assign:
+            task, _, num = item.partition("=")
+            if task not in G.TASKS or not num.isdigit() or int(num) >= len(found):
+                sys.exit(f"看不懂“{item}”。格式是 任务=编号，任务可选：{', '.join(G.TASKS)}")
+            plan[task] = found[int(num)]
+    elif args.setup:
+        for task in G.TASKS:
+            num = _ask(f"{G.TASKS[task]}用哪张卡？", str(found.index(plan[task])))
+            if num.isdigit() and int(num) < len(found):
+                plan[task] = found[int(num)]
+            else:
+                print(f"  没有编号 {num}，保持推荐的 [{found.index(plan[task])}]")
+
+    if len(found) > 1 and plan["lipsync"] is plan["voice_changer"]:
+        print("\n提醒：口型和变声分到了同一张卡上，两边会互相抢资源。有意为之的话可以忽略。")
+    for task, g in plan.items():
+        if load.get(g.uuid, 0) > 0.7 and task == "lipsync":
+            print(f"提醒：{g.name} 跑口型占了实时预算的 {load[g.uuid]:.0%}，直播时可能卡顿。")
+
+    G.save_config(plan, kinds)
+    print(f"\n已保存到 {G.CONFIG_FILE}：")
+    for task, g in plan.items():
+        print(f"  {G.TASKS[task]} → {g.name}")
+
+    script = args.voice_changer_script
+    if args.setup and not script:
+        script = _ask("变声器的启动脚本路径（例如 D:\\RVC\\go-realtime-gui.bat，直接回车跳过）")
+    if script:
+        G.write_launcher(script, plan["voice_changer"], LAUNCHER_PATH)
+        print(f"已生成 {LAUNCHER_PATH}：以后用它启动变声器，变声器就只会用 {plan['voice_changer'].name}。")
+    else:
+        print(f"变声器那边：启动它之前设置 CUDA_VISIBLE_DEVICES={plan['voice_changer'].uuid}，"
+              "或者重新运行 gpus --setup 并填上它的启动脚本，自动生成。")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m avatarstream", description="真人驱动的数字人直播：你说话，数字人实时对口型")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -194,7 +328,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-seconds", type=float, default=30)
     s.add_argument("--resize-height", type=int, default=None, help="视频太大时缩到这个高度，例如 1280")
     s.add_argument("--no-smooth", action="store_true")
+    s.add_argument("--device", default="auto", help="人脸检测用的设备，默认跟口型生成用同一张卡")
     s.set_defaults(func=cmd_make_avatar)
+
+    s = sub.add_parser("gpus", help="查看显卡，给口型和变声分配显卡")
+    s.add_argument("--setup", action="store_true", help="一步步问你，每项任务用哪张卡")
+    s.add_argument("--auto", action="store_true", help="直接采用推荐方案并保存")
+    s.add_argument("--assign", nargs="+", metavar="任务=编号",
+                   help="手动指定，例如 lipsync=1 voice_changer=0（编号见列表）")
+    s.add_argument("--voice-changer", choices=list(DEMAND_KINDS["voice_changer"]), default=None,
+                   help="你用的变声器，决定它对显卡的要求")
+    s.add_argument("--voice-changer-script", default=None,
+                   help="变声器的启动脚本（例如 RVC 的 go-realtime-gui.bat），会生成一个锁定显卡的启动脚本")
+    s.add_argument("--test-lipsync", action="store_true", help="在每张卡上实测口型模型的速度")
+    s.add_argument("--model", default="models/wav2lip.pth")
+    s.add_argument("--batch-size", type=int, default=8)
+    s.add_argument("--no-benchmark", action="store_true", help="不跑性能测试，只按硬件参数排序")
+    s.set_defaults(func=cmd_gpus)
 
     s = sub.add_parser("render", help="把一段音频离线生成口型视频（用来检查效果）")
     _add_engine_args(s)
@@ -221,6 +371,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> None:
+    # Number GPUs by PCI slot, like nvidia-smi and the voice-changer launcher do.
+    os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     args = build_parser().parse_args(argv)
     _setup_logging(args.verbose)
     args.func(args)

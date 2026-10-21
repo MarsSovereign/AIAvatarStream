@@ -70,6 +70,7 @@ python -m avatarstream download   # 模型和示例形象；--avatar all 下载�
 
 ```bash
 python -m avatarstream devices                       # 列出音频设备
+python -m avatarstream gpus --setup --test-lipsync   # 多显卡：给口型和变声分配显卡
 python -m avatarstream download --avatar all          # 下载模型和三个示例形象
 python -m avatarstream make-avatar --video me.mp4 --out data/my_avatar
 python -m avatarstream render --audio a.wav --out out.mp4         # 离线生成，检查效果
@@ -81,6 +82,7 @@ python -m avatarstream live --input-device "CABLE Output" --fp16  # 开始直播
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--input-device` | 系统默认 | 变声器输出到的设备，写编号或名字片段 |
+| `--device` | `auto` | 用哪张卡。`auto` 按 `gpu_config.json` 的分配；也可以写 `cuda:1` 临时指定 |
 | `--avatar` | `data/wav2lip_avatar_glass_man` | 形象目录 |
 | `--batch-size` | 8 | 每批生成多少帧。越小延迟越低，越大越省显卡。直播建议 4 到 8 |
 | `--fp16` | 关 | N 卡半精度，更快更省显存，推荐打开 |
@@ -91,6 +93,45 @@ python -m avatarstream live --input-device "CABLE Output" --fp16  # 开始直播
 | `--input-file` | 无 | 用音频文件代替麦克风，彩排用，加 `--loop` 循环 |
 | `--record` | 无 | 同时录一份 mp4 |
 | `--port` | 8010 | 预览和状态页端口 |
+
+## 多张显卡
+
+变声器和口型各用一张卡，两边就不会互相抢资源，延迟也更稳定。项目会按任务负载推荐分配方案，**每一项你都可以改**。
+
+双击 `scripts\setup_gpus.bat`（或运行 `python -m avatarstream gpus --setup --test-lipsync`），它会：
+
+1. 列出所有 N 卡，测出每张卡的实际算力。
+2. 在每张卡上实测口型模型的速度，算出占实时预算的百分比。
+3. 问你用的是哪个变声器，按负载给出推荐：**负载重的任务放在快的卡上**。
+4. 逐项问你“口型用哪张卡、变声用哪张卡”，直接回车就是采用推荐，也可以输入其他编号。
+5. 保存到 `gpu_config.json`。以后 `live`、`render`、`make-avatar` 都会自动使用口型那张卡。
+6. 你填上变声器的启动脚本（比如 RVC 的 `go-realtime-gui.bat`）后，它会生成 `scripts\start_voice_changer.bat`，以后用这个脚本启动变声器，变声器就只会用分给它的那张卡。
+
+各任务的负载参考（1 轻，5 重）：
+
+| 任务 | 选项 | 负载 |
+|---|---|---|
+| 口型 | Wav2Lip | 2 |
+| 口型 | MuseTalk（计划中） | 5 |
+| 变声 | RVC | 2 |
+| 变声 | Seed-VC | 5 |
+
+两项负载相同时，口型优先用强卡，因为每批画面都必须在固定时间内算完；变声器自己有音频缓冲，抗抖动能力更强。所以：
+
+- Wav2Lip 加 RVC：**口型用强卡，RVC 用弱卡**。RVC 对显卡要求不高，弱卡就够。
+- Wav2Lip 加 Seed-VC：Seed-VC 更重，它用强卡，口型用弱卡。
+- 如果实测发现某张卡跑口型超过实时预算的 70%，推荐方案会自动把口型换到能跑得动的卡上。
+
+不想用问答方式的话：
+
+```bash
+python -m avatarstream gpus                                   # 查看显卡和当前分配
+python -m avatarstream gpus --auto --voice-changer rvc        # 直接采用推荐方案
+python -m avatarstream gpus --assign lipsync=1 voice_changer=0 --voice-changer-script D:\RVC\go-realtime-gui.bat
+python -m avatarstream live --device cuda:0                   # 临时指定，不改配置
+```
+
+显卡在配置里按硬件 UUID 记录，不按编号。不同程序给显卡排序的规则不一样（CUDA 默认把最快的卡排第一，nvidia-smi 按插槽排），按编号记录可能会把任务分错卡。生成的变声器启动脚本里也直接写 UUID，所以两边指的一定是同一张卡。
 
 ## 延迟
 
@@ -144,10 +185,11 @@ ruff check .
 - **口型引擎**：静音时跳过模型、显示待机帧；说话时只改动脸框内的像素；`lower` 模式下眼睛区域不变。
 - **实时流水线**（用替身模型）：稳定输出 25 帧/秒；输入的每个音频采样都按顺序、无缺漏地随画面输出；预览、状态页和 MJPEG 流可以访问。
 - **`live` 命令**：完整跑一遍并录成 mp4，检查音画时长一致。
+- **显卡分配**（用模拟的强卡和弱卡）：负载重的任务分到快的卡；配置按 UUID 找卡，显卡编号变了也能找对；交互式设置里可以逐项改掉推荐；变声器启动脚本里写入了正确的 UUID；实测口型跑不动的卡会被自动避开。
 - **形象生成**：S3FD 和 Haar 检测出的人脸框，与示例形象自带的人脸框重合度分别超过 0.8 和 0.6。
 - **真实模型**：用真人语音驱动时，嘴部的运动明显大于待机视频本身的运动；离线渲染的音画时长一致。
 
-**没有自动测试的部分**：GPU 上的实时性能、真实麦克风和虚拟声卡、虚拟摄像头输出。这些需要在你的 Windows 电脑上验证，步骤见[直播搭建指南](docs/直播搭建指南.md)里的“开播前检查”。
+**没有自动测试的部分**：GPU 上的实时性能和多卡的真实运行（分配逻辑已用模拟显卡测过）、真实麦克风和虚拟声卡、虚拟摄像头输出。这些需要在你的 Windows 电脑上验证，步骤见[直播搭建指南](docs/直播搭建指南.md)里的“开播前检查”。
 
 ## 致谢与许可
 

@@ -19,7 +19,7 @@ echo [4/4] 下载模型和示例形象（国内网络可先 set HF_ENDPOINT=http
 .venv\Scripts\python -m avatarstream download || goto :error
 .venv\Scripts\python -c "import torch; print('CUDA 可用:', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"
 echo.
-echo 安装完成。下一步：运行 scripts\list_devices.bat 找到虚拟声卡的名字。
+echo 安装完成。下一步：有多张显卡就运行 scripts\setup_gpus.bat 分配显卡；然后运行 scripts\list_devices.bat 找到虚拟声卡的名字。
 pause
 exit /b 0
 

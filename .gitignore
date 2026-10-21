@@ -10,3 +10,5 @@ venv/
 *.mp4
 *.part
 !tests/data/*.wav
+gpu_config.json
+scripts/start_voice_changer.bat
